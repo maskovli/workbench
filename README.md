@@ -19,4 +19,4 @@ _archive/             # Old scripts kept for reference
 
 ## Related
 
-- [EntraGATE](../EntraGATE) — PowerShell module for Entra ID (public)
+- [EntraGATE](./entragate) — PowerShell module for Entra ID governance
