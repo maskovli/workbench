@@ -41,6 +41,15 @@ Tests/                  # Pester tests
 pwsh -Command "Invoke-Pester ./Tests/ -Output Detailed"
 ```
 
+## Commit policy
+
+All commits are made by **Marius A. Skovli**.
+
+- **Do NOT commit or push** — stage changes and stop. Marius reviews and commits manually
+- **Do NOT add `Co-Authored-By` lines** to suggested commit messages
+- Prepare a suggested commit message using conventional commits (`feat:`, `fix:`, `docs:`, `refactor:`) and present it for Marius to use
+- This workflow is important for Microsoft MVP contribution tracking and community credibility
+
 ## Style
 
 - PowerShell 7.2+ features OK (ternary, null-coalescing, etc.)

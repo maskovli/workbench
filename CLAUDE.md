@@ -2,11 +2,12 @@
 
 ## Commit policy
 
-All commits in this repo represent the work of **Marius A. Skovli**.
+All commits in this repo are made by **Marius A. Skovli**.
 
-- **Do NOT add `Co-Authored-By` lines** to commit messages in this repo
-- Claude may assist with research, review, and suggestions, but commits are authored by Marius alone
-- This is important for Microsoft MVP contribution tracking and community credibility
+- **Do NOT commit or push** — stage changes and stop. Marius reviews and commits manually
+- **Do NOT add `Co-Authored-By` lines** to suggested commit messages
+- Prepare a suggested commit message (conventional commits: `feat:`, `fix:`, `docs:`, `refactor:`) and present it for Marius to use
+- This workflow is important for Microsoft MVP contribution tracking and community credibility
 
 ## About this repo
 
