@@ -1,0 +1,18 @@
+{
+  "Rules": [
+    {
+      "SettingName": "Model",
+      "Operator": "IsEquals",
+      "DataType": "String",
+      "Operand": "21N10008MX",
+      "MoreInfoUrl": "https://support.lenovo.com",
+      "RemediationStrings": [
+        {
+          "Language": "en_US",
+          "Title": "The device must be a Lenovo 21N10008MX.",
+          "Description": "Your device does not meet the compliance requirement."
+        }
+      ]
+    }
+  ]
+}

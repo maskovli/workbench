@@ -1,0 +1,32 @@
+{
+  "Rules": [
+    {
+      "SettingName": "WDACEnforced",
+      "Operator": "IsEquals",
+      "DataType": "Boolean",
+      "Operand": true,
+      "MoreInfoUrl": "https://docs.microsoft.com/en-us/windows/security/threat-protection/windows-defender-application-control/windows-defender-application-control-deployment-guide",
+      "RemediationStrings": [
+        {
+          "Language": "en_US",
+          "Title": "WDAC is not enforced.",
+          "Description": "Windows Defender Application Control (WDAC) must be enforced to meet compliance."
+        }
+      ]
+    },
+    {
+      "SettingName": "WDACUserModeCodeIntegrity",
+      "Operator": "IsEquals",
+      "DataType": "Boolean",
+      "Operand": true,
+      "MoreInfoUrl": "https://docs.microsoft.com/en-us/windows/security/threat-protection/windows-defender-application-control/windows-defender-application-control-deployment-guide",
+      "RemediationStrings": [
+        {
+          "Language": "en_US",
+          "Title": "UMCI is not enforced.",
+          "Description": "User Mode Code Integrity (UMCI) must be enabled to meet compliance."
+        }
+      ]
+    }
+  ]
+}

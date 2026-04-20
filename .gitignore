@@ -1,0 +1,30 @@
+# macOS
+.DS_Store
+.AppleDouble
+
+# Output / data
+*.csv
+*.log
+*.json.bak
+output/
+
+# Binaries / packages
+*.zip
+*.exe
+*.msi
+*.intunewin
+*.pkg
+*.dmg
+
+# Temp / scratch
+temp*
+*copy*
+Untitled*.ps1
+
+# Credentials / secrets
+*.pfx
+*.cer
+*.key
+secrets.ps1
+*-secret*
+*-creds*

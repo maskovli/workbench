@@ -1,0 +1,1 @@
+certutil -addstore -f -enterprise root (Get-ChildItem C:\Rigel\x64\Ship\AppPackages\*\*.cer | Foreach-Object { $_.FullName })

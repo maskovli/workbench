@@ -1,0 +1,32 @@
+{
+  "Rules": [
+    {
+      "SettingName": "GSAClientInstalled",
+      "Operator": "IsEquals",
+      "DataType": "Boolean",
+      "Operand": true,
+      "MoreInfoUrl": "https://learn.microsoft.com/en-us/azure/active-directory/secure-access/microsoft-entra-secure-access",
+      "RemediationStrings": [
+        {
+          "Language": "en_US",
+          "Title": "Global Secure Access client is not installed.",
+          "Description": "The Microsoft Entra Global Secure Access client must be installed to meet compliance."
+        }
+      ]
+    },
+    {
+      "SettingName": "GSAServiceRunning",
+      "Operator": "IsEquals",
+      "DataType": "Boolean",
+      "Operand": true,
+      "MoreInfoUrl": "https://learn.microsoft.com/en-us/azure/active-directory/secure-access/microsoft-entra-secure-access",
+      "RemediationStrings": [
+        {
+          "Language": "en_US",
+          "Title": "Global Secure Access service is not running.",
+          "Description": "The Microsoft Entra Global Secure Access client must be running to meet compliance."
+        }
+      ]
+    }
+  ]
+}

@@ -1,0 +1,30 @@
+//Global Administrator Activations (High-Impact)
+// Marius A. Skovli | Spirhed AS | https://spirhed.com
+//03.10.2024
+AuditLogs
+| where Category == "ResourceManagement"  // Filter for Azure resource activations
+| where OperationName in (
+    "Add member to role completed (PIM activation)",
+    "Add member to role requested (PIM activation)",
+    "Remove member from role (PIM activation expired)"
+)
+| where tostring(parse_json(TargetResources[0]).displayName) == "Owner"  // Filter for Owner role
+| extend 
+    User = tostring(parse_json(InitiatedBy.user).displayName),
+    Role = tostring(parse_json(TargetResources[0]).displayName),
+    RoleID = tostring(parse_json(TargetResources[0]).id),
+    Justification = ResultDescription,
+    StartTimeRaw = parse_json(AdditionalDetails[3]).value,
+    ExpirationTimeRaw = parse_json(AdditionalDetails[4]).value,
+    ActivationTime = TimeGenerated
+| extend
+    StartTime = todatetime(StartTimeRaw),
+    ExpirationTime = todatetime(ExpirationTimeRaw)
+| extend
+    FormattedStart = strcat("D: ", format_datetime(StartTime, 'dd.MM.yyyy'), " T: ", format_datetime(StartTime, 'HH.mm')),
+    FormattedExpiration = strcat("D: ", format_datetime(ExpirationTime, 'dd.MM.yyyy'), " T: ", format_datetime(ExpirationTime, 'HH.mm'))
+| extend
+    ActivationRange = strcat(FormattedStart, " - ", FormattedExpiration),
+    RequestedHours = datetime_diff('hour', ExpirationTime, StartTime)
+| project User, Role, RoleID, Justification, ActivationRange, RequestedHours, ActivationTime
+| order by ActivationTime desc
