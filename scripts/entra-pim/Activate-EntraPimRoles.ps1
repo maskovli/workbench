@@ -31,7 +31,7 @@ param(
   [ValidateSet('Auto','Interactive','DeviceCode')]
   [string] $Auth = 'Auto',
 
-  [string] $Duration = '1h',
+  [string] $Duration,
   [string] $Justification,
   [string] $TicketSystem,
   [string] $TicketNumber,
@@ -1039,7 +1039,8 @@ try {
       }
       if (-not $picked -or $picked.Count -eq 0) { Write-Host "Nothing selected."; break }
 
-      $rawDur = if ($Duration) { $Duration } else { Read-Host "Duration (e.g. 30m, 1h, 2h30m)" }
+      $rawDur = if ($Duration) { $Duration } else { Read-Host "Duration (e.g. 30m, 1h, 2h30m, 4h) [Enter = 1h]" }
+      if ([string]::IsNullOrWhiteSpace($rawDur)) { $rawDur = '1h' }
       $iso = ConvertTo-IsoDuration $rawDur
 
       if (-not $Justification) { $Justification = Read-Host "Enter justification" }
