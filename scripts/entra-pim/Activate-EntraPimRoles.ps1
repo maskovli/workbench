@@ -188,6 +188,17 @@ function Invoke-GraphLogin {
   Write-Host ("Signed in as: {0}" -f $ctx.Account) -ForegroundColor Green
 }
 
+function Get-SavedAzContextForUpn {
+  <# Returns a saved Az context matching the given UPN, or $null.
+     Match on Account.Id only — Tenant.Id reflects subscription tenant, which
+     can differ from the Entra tenant and cause false negatives. #>
+  param([Parameter(Mandatory)][string]$Upn)
+  if (-not (Get-Command Get-AzContext -ErrorAction SilentlyContinue)) { return $null }
+  return Get-AzContext -ListAvailable -ErrorAction SilentlyContinue |
+         Where-Object { $_.Account -and $_.Account.Id -ieq $Upn } |
+         Select-Object -First 1
+}
+
 function Connect-GraphSmart {
   param([string]$TenantId, [string]$Auth = 'Auto', [switch]$ForceLogin)
 
@@ -195,6 +206,7 @@ function Connect-GraphSmart {
   # in the same shell doesn't leak tenant display names between runs.
   $script:CachedTenantName = $null
   $script:AzConnected      = $false
+  $script:SkipAz           = $false
 
   Ensure-Module Microsoft.Graph.Authentication       -MinVersion '2.15.0' | Out-Null
   Ensure-Module Microsoft.Graph.Identity.Governance  -MinVersion '2.15.0' | Out-Null
@@ -223,10 +235,15 @@ function Connect-GraphSmart {
       }
       $tenantMismatch = $TenantId -and ($TenantId -ne $ctx.TenantId)
 
+      # Detect saved Az context for the same UPN — purely informational here.
+      $savedAz = Get-SavedAzContextForUpn -Upn $ctx.Account
+      $azStatus = if ($savedAz) { "reuse ready ($($savedAz.Account.Id))" } else { 'not connected (will ask before device code)' }
+
       Write-Host ""
       Write-Host "Existing Microsoft Graph session detected:" -ForegroundColor Cyan
       Write-Host ("  Account : {0}" -f $ctx.Account) -ForegroundColor White
       Write-Host ("  Tenant  : {0}" -f $ctx.TenantId) -ForegroundColor White
+      Write-Host ("  Azure   : {0}" -f $azStatus) -ForegroundColor White
       if ($missing.Count -gt 0) {
         Write-Host ("  Warning : Missing {0} required scope(s) -- a re-login may be needed." -f $missing.Count) -ForegroundColor Yellow
       }
@@ -236,13 +253,24 @@ function Connect-GraphSmart {
       Write-Host ""
       Write-Host "What do you want to do?" -ForegroundColor Cyan
       Write-Host "  [C] Continue with this session (default)"
+      Write-Host "  [D] Continue, Directory/Groups only (skip Azure Resources)"
       Write-Host "  [S] Switch account / sign in as someone else"
       Write-Host "  [Q] Quit"
-      $ans = Read-Host "Select [C/S/Q]"
+      $ans = Read-Host "Select [C/D/S/Q]"
 
       switch -Regex ($ans) {
         '^(q|Q)$' { throw "Aborted by user." }
         '^(s|S)$' { Invoke-GraphLogin -Method $Auth -TenantId $TenantId; return }
+        '^(d|D)$' {
+          $script:SkipAz = $true
+          if ($missing.Count -gt 0 -or $tenantMismatch) {
+            Write-Host "Re-authenticating to obtain required scopes / tenant..." -ForegroundColor Yellow
+            Invoke-GraphLogin -Method $Auth -TenantId $TenantId
+            return
+          }
+          Write-Host "Reusing existing session. Azure Resources will be skipped." -ForegroundColor Green
+          return
+        }
         default {
           if ($missing.Count -gt 0 -or $tenantMismatch) {
             Write-Host "Re-authenticating to obtain required scopes / tenant..." -ForegroundColor Yellow
@@ -261,18 +289,21 @@ function Connect-GraphSmart {
 }
 
 function Ensure-AzConnected {
-  <# Lazy connect to Azure. Called only when we actually need to query/modify
-     Azure Resources PIM. Skips if already connected to the correct identity. #>
+  <# Lazy connect to Azure. Returns $true if connected, $false if user skipped.
+     Called only when we actually need to query/modify Azure Resources PIM. #>
   param([string]$TenantId)
-  if ($script:AzConnected) { return }
-  Connect-AzureSmart -TenantId $TenantId
-  $script:AzConnected = $true
+  if ($script:SkipAz)     { return $false }
+  if ($script:AzConnected) { return $true  }
+  $connected = Connect-AzureSmart -TenantId $TenantId
+  $script:AzConnected = $connected
+  return $connected
 }
 
 function Connect-AzureSmart {
   <# Ensures Az session matches the current Graph session (same UPN + tenant).
-     If an existing Az session belongs to a different account/tenant, it is
-     disconnected and re-authenticated against the Graph identity. #>
+     Silently reuses a saved Az context if one exists; otherwise asks the user
+     before triggering device code auth. Returns $true on success, $false if
+     user declined. #>
   param([string]$TenantId)
 
   Ensure-Module Az.Accounts  -MinVersion '2.13.0' | Out-Null
@@ -286,48 +317,45 @@ function Connect-AzureSmart {
   $expectedUpn      = $graphCtx.Account
   $expectedTenantId = if ($TenantId) { $TenantId } else { $graphCtx.TenantId }
 
+  # Fast path: saved context exists — reuse silently.
+  $matchCtx = Get-SavedAzContextForUpn -Upn $expectedUpn
+  if ($matchCtx) {
+    Select-AzContext -InputObject $matchCtx -ErrorAction Stop | Out-Null
+    Write-Cyber "Az context reused: $($matchCtx.Account.Id)" 'AUTH' 'Green'
+    return $true
+  }
+
+  # No saved context — ask the user before triggering interactive device code.
+  Write-Host ""
+  Write-Cyber "Azure Resources requires a separate Azure sign-in." 'AUTH' 'Yellow'
+  Write-Host "  [Y] Sign in now (device code)  [N] Skip Azure Resources for this session" -ForegroundColor Cyan
+  $ans = Read-Host "Select [Y/N]"
+  if ($ans -notmatch '^(y|Y|j|J)$') {
+    $script:SkipAz = $true
+    Write-Cyber "Skipping Azure Resources for this session." 'INFO' 'DarkGray'
+    return $false
+  }
+
+  # Clear any mismatched active context before connecting fresh.
   $azCtx = Get-AzContext -ErrorAction SilentlyContinue
-  if ($azCtx -and $azCtx.Account) {
-    $upnMatch    = ($azCtx.Account.Id -ieq $expectedUpn)
-    $tenantMatch = ($azCtx.Tenant.Id  -ieq $expectedTenantId)
-
-    if ($upnMatch -and $tenantMatch) {
-      Write-Cyber "Az session matches Graph identity: $($azCtx.Account.Id)" 'AUTH' 'Green'
-      return
-    }
-
-    Write-Cyber "Az session mismatch detected — refusing to reuse." 'WARN' 'Yellow'
-    Write-Host  "  Graph identity : $expectedUpn  (tenant $expectedTenantId)" -ForegroundColor DarkGray
-    Write-Host  "  Az    identity : $($azCtx.Account.Id)  (tenant $($azCtx.Tenant.Id))" -ForegroundColor DarkGray
-    Write-Host  "  Note: Graph and Azure use separate token caches. A one-time" -ForegroundColor DarkGray
-    Write-Host  "        Az re-login is required. Future runs will be silent." -ForegroundColor DarkGray
-
-    # Wipe ALL Az contexts so nothing leaks between tenants
-    try { Disconnect-AzAccount -ErrorAction SilentlyContinue | Out-Null } catch {}
+  if ($azCtx -and $azCtx.Account -and $azCtx.Account.Id -ine $expectedUpn) {
+    Write-Cyber "Active Az context belongs to a different identity — clearing." 'WARN' 'Yellow'
     try { Clear-AzContext -Scope Process -Force -ErrorAction SilentlyContinue | Out-Null } catch {}
-    try { Clear-AzContext -Scope CurrentUser -Force -ErrorAction SilentlyContinue | Out-Null } catch {}
   }
 
   Write-Cyber "Connecting to Azure as $expectedUpn (tenant $expectedTenantId)..." 'AUTH' 'Yellow'
-  $azArgs = @{
-    Tenant                  = $expectedTenantId
-    AccountId               = $expectedUpn      # hints which account to use, blocks silent token reuse
-    UseDeviceAuthentication = $true
-  }
-  Connect-AzAccount @azArgs | Out-Null
+  # Omit -AccountId: on macOS it triggers an extra MSAL "Please select the account"
+  # prompt even with -UseDeviceAuthentication. Identity is verified below.
+  Connect-AzAccount -Tenant $expectedTenantId `
+                    -UseDeviceAuthentication -WarningAction SilentlyContinue | Out-Null
 
-  # Post-login verification — fail loud if Azure handed us a different identity
   $newCtx = Get-AzContext -ErrorAction SilentlyContinue
-  if (-not $newCtx -or -not $newCtx.Account) {
-    throw "Azure login did not produce a context."
-  }
+  if (-not $newCtx -or -not $newCtx.Account) { throw "Azure login did not produce a context." }
   if ($newCtx.Account.Id -ine $expectedUpn) {
-    throw "Azure login returned wrong identity: got '$($newCtx.Account.Id)', expected '$expectedUpn'. Aborting."
+    throw "Azure login returned wrong identity: got '$($newCtx.Account.Id)', expected '$expectedUpn'."
   }
-  if ($newCtx.Tenant.Id -ine $expectedTenantId) {
-    throw "Azure login returned wrong tenant: got '$($newCtx.Tenant.Id)', expected '$expectedTenantId'. Aborting."
-  }
-  Write-Cyber "Az session OK: $($newCtx.Account.Id) @ $($newCtx.Tenant.Id)" 'OK' 'Green'
+  Write-Cyber "Az session OK: $($newCtx.Account.Id)" 'OK' 'Green'
+  return $true
 }
 
 function Get-MyUserId {
@@ -677,7 +705,7 @@ function Get-AzScopesToScan {
 }
 
 function Get-AzEligibleRows {
-  Ensure-AzConnected -TenantId $TenantId
+  if (-not (Ensure-AzConnected -TenantId $TenantId)) { return @() }
   $meId = Get-MyUserId
   $rows = @()
   foreach ($scope in (Get-AzScopesToScan)) {
@@ -708,7 +736,7 @@ function Get-AzEligibleRows {
 }
 
 function Get-AzActiveRows {
-  Ensure-AzConnected -TenantId $TenantId
+  if (-not (Ensure-AzConnected -TenantId $TenantId)) { return @() }
   $meId = Get-MyUserId
   $rows = @()
   foreach ($scope in (Get-AzScopesToScan)) {
@@ -807,7 +835,7 @@ function Build-CombinedEligible {
     $list += [pscustomobject]@{ Category=''; Name='Groups (PIM for Groups)'; Scope=''; ActiveNow=$false; IsSeparator=$true }
     try { $list += Get-GroupEligibleRows } catch { Write-Warning "Could not fetch Group eligibilities: $($_.Exception.Message)" }
   }
-  if ($IncAz) {
+  if ($IncAz -and -not $script:SkipAz) {
     $list += [pscustomobject]@{ Category=''; Name='Azure Resources'; Scope=''; ActiveNow=$false; IsSeparator=$true }
     try { $list += Get-AzEligibleRows } catch { Write-Warning "Could not fetch Azure eligibilities: $($_.Exception.Message)" }
   }
@@ -825,7 +853,7 @@ function Build-CombinedActive {
     $list += [pscustomobject]@{ Category=''; Name='Groups (active)'; Scope=''; ActiveNow=$false; IsSeparator=$true }
     try { $list += Get-GroupActiveRows } catch { Write-Warning "Could not fetch Group assignments: $($_.Exception.Message)" }
   }
-  if ($IncAz) {
+  if ($IncAz -and -not $script:SkipAz) {
     $list += [pscustomobject]@{ Category=''; Name='Azure Resources (active)'; Scope=''; ActiveNow=$false; IsSeparator=$true }
     try { $list += Get-AzActiveRows } catch { Write-Warning "Could not fetch Azure assignments: $($_.Exception.Message)" }
   }

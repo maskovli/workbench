@@ -13,7 +13,7 @@ Private/Auth.ps1        # Shared auth: Connect-GateGraph, Connect-GateAzure, Get
 Private/UI.ps1          # Shared UI: Show-GateBanner, Write-Cyber, Select-GateItems
 Private/Duration.ps1    # ConvertTo-IsoDuration, Get-MinFromIso
 Public/Start-EntraGate.ps1      # Main entry: dashboard + menu loop
-Public/Invoke-GatePim.ps1       # PIM activation (STUB — needs migration)
+Public/Invoke-GatePim.ps1       # PIM activation — Directory, Groups, Azure Resources ✓
 Public/Invoke-GateAccessReview.ps1  # Access Reviews (STUB — needs migration)
 _standalone/            # Original working scripts — use as reference for migration
 Tests/                  # Pester tests
@@ -31,8 +31,8 @@ Tests/                  # Pester tests
 
 ## Priority tasks
 
-1. **Migrate PIM**: Take `_standalone/Activate-EntraPimRoles.ps1` and refactor its logic into `Public/Invoke-GatePim.ps1`, replacing inline helpers with shared Gate* functions.
-2. **Migrate Access Reviews**: Same for `_standalone/Invoke-EntraAccessReview.ps1` → `Public/Invoke-GateAccessReview.ps1`.
+1. ~~**Migrate PIM**~~ ✓ Done — `Public/Invoke-GatePim.ps1` fully migrated from `_standalone/Activate-EntraPimRoles.ps1`.
+2. **Migrate Access Reviews**: `_standalone/Invoke-EntraAccessReview.ps1` → `Public/Invoke-GateAccessReview.ps1` (still stub).
 3. **New modules**: Build Conditional Access, Guest Lifecycle, Risky Users, Expiring Secrets, License Overview as new files in Public/.
 
 ## Testing
