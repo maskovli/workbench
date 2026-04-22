@@ -167,23 +167,26 @@ function Connect-GateAzure {
   $expectedUpn    = $graphCtx.Account
   $expectedTenant = if ($TenantId) { $TenantId } else { $graphCtx.TenantId }
 
-  # Check existing Az session
+  # Match on Account.Id only — Tenant.Id reflects the subscription tenant, not the Entra tenant.
+  $matchCtx = Get-AzContext -ListAvailable -ErrorAction SilentlyContinue |
+    Where-Object { $_.Account -and $_.Account.Id -ieq $expectedUpn } |
+    Select-Object -First 1
+
+  if ($matchCtx) {
+    Select-AzContext -InputObject $matchCtx -ErrorAction Stop | Out-Null
+    Write-Cyber "Az context reused: $($matchCtx.Account.Id)" 'OK' 'Green'
+    $script:GateSession.AzConnected = $true
+    return
+  }
+
   $azCtx = Get-AzContext -ErrorAction SilentlyContinue
-  if ($azCtx -and $azCtx.Account) {
-    $upnOk    = ($azCtx.Account.Id -ieq $expectedUpn)
-    $tenantOk = ($azCtx.Tenant.Id  -ieq $expectedTenant)
-    if ($upnOk -and $tenantOk) {
-      Write-Cyber "Az session matches Graph identity." 'OK' 'Green'
-      $script:GateSession.AzConnected = $true
-      return
-    }
-    Write-Cyber "Az session mismatch — re-authenticating." 'WARN' 'Yellow'
-    try { Disconnect-AzAccount -ErrorAction SilentlyContinue | Out-Null } catch {}
+  if ($azCtx -and $azCtx.Account -and $azCtx.Account.Id -ine $expectedUpn) {
+    Write-Cyber "Active Az context belongs to a different identity — clearing." 'WARN' 'Yellow'
     try { Clear-AzContext -Scope Process -Force -ErrorAction SilentlyContinue | Out-Null } catch {}
   }
 
   Write-Cyber "Connecting to Azure as $expectedUpn..." 'AUTH' 'Yellow'
-  Connect-AzAccount -Tenant $expectedTenant -AccountId $expectedUpn -UseDeviceAuthentication | Out-Null
+  Connect-AzAccount -Tenant $expectedTenant -AccountId $expectedUpn -UseDeviceAuthentication -WarningAction SilentlyContinue | Out-Null
 
   # Verify
   $newCtx = Get-AzContext -ErrorAction SilentlyContinue
