@@ -1,6 +1,7 @@
 # workbench
 
-Personal monorepo for scripts, notes, and infrastructure work.
+Personal workspace for general scripts, notes, and infrastructure tools.
+Productized projects live in their own repositories.
 
 ## Structure
 
@@ -19,4 +20,4 @@ _archive/             # Old scripts kept for reference
 
 ## Related
 
-- [EntraGATE](./entragate) — PowerShell module for Entra ID governance
+- EntraGate — separate PowerShell module project for Entra ID governance: https://github.com/maskovli/entragate
