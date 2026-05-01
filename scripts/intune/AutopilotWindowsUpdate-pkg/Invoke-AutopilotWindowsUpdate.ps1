@@ -9,19 +9,22 @@
     Shows a locked, visible status window during enrollment so the user can see
     progress. The window cannot be closed or minimized until updates complete.
 
-    Designed for use as a Win32 app under Autopilot User ESP.
-    Run as SYSTEM (Install behavior: System) and use ServiceUI.exe from MDT
-    to project the window into the user session.
+    When updates require a reboot (and -NoReboot is NOT set), a 15-minute
+    countdown panel appears with three buttons: Pause, Restart now, Shutdown.
 
 .PARAMETER AutoReboot
-    Reboots the machine automatically if updates require it.
+    Reboots the machine automatically (30s wait, no countdown UI).
+    Use this for fire-and-forget automation.
 
 .PARAMETER NoReboot
-    Suppresses reboot even if required. Recommended for ESP flows where
+    Suppresses reboot completely. Recommended for Autopilot ESP flows where
     Autopilot/Intune handles reboots.
 
 .PARAMETER KBArticleID
     Limit to specific KB articles (optional).
+
+.PARAMETER CountdownSeconds
+    Length of reboot countdown in seconds. Defaults to 900 (15 minutes).
 
 .NOTES
     Requires:  PSWindowsUpdate module (auto-installed)
@@ -29,7 +32,7 @@
                Visible to user via ServiceUI.exe -process:explorer.exe
     Detection: HKLM:\SOFTWARE\AutopilotWindowsUpdate\Status = "Completed"
     Log:       C:\Windows\Logs\AutopilotWindowsUpdate\AutopilotWindowsUpdate.log
-    Version:   1.3
+    Version:   1.4
 
     NOTE: Entire script uses ASCII characters to avoid parser errors when
     Windows PowerShell 5.1 reads files without UTF-8 BOM.
@@ -39,7 +42,8 @@
 param(
     [switch]$AutoReboot,
     [switch]$NoReboot,
-    [string[]]$KBArticleID
+    [string[]]$KBArticleID,
+    [int]$CountdownSeconds = 900
 )
 
 # StrictMode is intentionally NOT enabled -- PSWindowsUpdate is not compatible.
@@ -58,9 +62,7 @@ function Write-FileLog {
         if (-not (Test-Path $dir)) { New-Item -Path $dir -ItemType Directory -Force | Out-Null }
         "[$(Get-Date -Format 'yyyy-MM-dd HH:mm:ss')] [$Level] $Message" |
             Out-File -FilePath $script:LogPath -Append -Encoding utf8
-    } catch {
-        # Do not throw if log write fails (e.g. missing rights during local test)
-    }
+    } catch { }
 }
 
 function Set-DetectionKey {
@@ -88,13 +90,25 @@ function Set-DetectionKey {
     xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
     xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
     Title="Windows Update - Autopilot Enrollment"
-    Height="580" Width="760"
-    MinHeight="580" MinWidth="760"
+    Height="620" Width="780"
+    MinHeight="620" MinWidth="780"
     WindowStartupLocation="CenterScreen"
     ResizeMode="NoResize"
     WindowStyle="SingleBorderWindow"
     Topmost="True"
     ShowInTaskbar="True">
+
+    <Window.Resources>
+        <Style x:Key="ActionButton" TargetType="Button">
+            <Setter Property="FontFamily" Value="Segoe UI"/>
+            <Setter Property="FontSize" Value="12"/>
+            <Setter Property="Padding" Value="14,5"/>
+            <Setter Property="Margin" Value="4,0"/>
+            <Setter Property="MinHeight" Value="28"/>
+            <Setter Property="MinWidth" Value="90"/>
+            <Setter Property="Cursor" Value="Hand"/>
+        </Style>
+    </Window.Resources>
 
     <Grid Background="#F3F3F3">
         <Grid.RowDefinitions>
@@ -154,20 +168,40 @@ function Set-DetectionKey {
             </RichTextBox>
         </Border>
 
-        <!-- Footer -->
+        <!-- Footer / Countdown -->
         <Border Grid.Row="3" Background="#E9E9E9"
                 BorderBrush="#D0D0D0" BorderThickness="0,1,0,0"
-                Padding="24,10">
+                Padding="24,10" MinHeight="48">
             <Grid>
                 <Grid.ColumnDefinitions>
                     <ColumnDefinition Width="*"/>
                     <ColumnDefinition Width="Auto"/>
                 </Grid.ColumnDefinitions>
+
+                <!-- Default footer text -->
                 <TextBlock x:Name="FooterLeft"
                            Grid.Column="0"
                            Text="Please wait - this window will close automatically."
                            FontFamily="Segoe UI" FontSize="11" Foreground="#555555"
                            VerticalAlignment="Center"/>
+
+                <!-- Countdown panel (hidden by default) -->
+                <StackPanel x:Name="CountdownPanel"
+                            Grid.Column="0"
+                            Orientation="Horizontal"
+                            VerticalAlignment="Center"
+                            Visibility="Collapsed">
+                    <TextBlock x:Name="CountdownText"
+                               Text="Restarting in 15:00"
+                               FontFamily="Segoe UI" FontSize="14" FontWeight="SemiBold"
+                               Foreground="#1A1A1A"
+                               VerticalAlignment="Center"
+                               Margin="0,0,18,0"/>
+                    <Button x:Name="PauseBtn"    Content="Pause"       Style="{StaticResource ActionButton}"/>
+                    <Button x:Name="RestartBtn"  Content="Restart now" Style="{StaticResource ActionButton}"/>
+                    <Button x:Name="ShutdownBtn" Content="Shutdown"    Style="{StaticResource ActionButton}"/>
+                </StackPanel>
+
                 <TextBlock x:Name="FooterRight"
                            Grid.Column="1"
                            Text=""
@@ -211,7 +245,8 @@ function Start-UpdateWindow {
     param(
         [switch]$AutoReboot,
         [switch]$NoReboot,
-        [string[]]$KBArticleID
+        [string[]]$KBArticleID,
+        [int]$CountdownSeconds = 900
     )
 
     Add-Type -AssemblyName PresentationFramework, PresentationCore, WindowsBase, System.Windows.Forms
@@ -220,17 +255,31 @@ function Start-UpdateWindow {
     $window = [Windows.Markup.XamlReader]::Load($reader)
 
     # Control references
-    $ctrlStatus   = $window.FindName('StatusText')
-    $ctrlProgress = $window.FindName('ProgressBar')
-    $ctrlCount    = $window.FindName('CountText')
-    $ctrlLog      = $window.FindName('LogBox')
-    $ctrlFooterR  = $window.FindName('FooterRight')
+    $ctrlStatus      = $window.FindName('StatusText')
+    $ctrlProgress    = $window.FindName('ProgressBar')
+    $ctrlCount       = $window.FindName('CountText')
+    $ctrlLog         = $window.FindName('LogBox')
+    $ctrlFooterLeft  = $window.FindName('FooterLeft')
+    $ctrlFooterR     = $window.FindName('FooterRight')
+    $ctrlCountdownP  = $window.FindName('CountdownPanel')
+    $ctrlCountdownT  = $window.FindName('CountdownText')
+    $ctrlPauseBtn    = $window.FindName('PauseBtn')
+    $ctrlRestartBtn  = $window.FindName('RestartBtn')
+    $ctrlShutdownBtn = $window.FindName('ShutdownBtn')
 
-    # Block Alt+F4 and the close button
+    # Synchronized state shared between main thread, runspace and UI dispatcher
+    $uiState = [hashtable]::Synchronized(@{
+        ClosingPermitted = $false
+        CountdownSeconds = $CountdownSeconds
+        CountdownPaused  = $false
+        CountdownTimer   = $null
+    })
+
+    # Block close until uiState.ClosingPermitted is true
     $window.Add_Closing({
         param($s, $e)
-        $e.Cancel = $true
-    })
+        if (-not $uiState.ClosingPermitted) { $e.Cancel = $true }
+    }.GetNewClosure())
 
     $window.Add_SourceInitialized({
         $hwnd = (New-Object System.Windows.Interop.WindowInteropHelper($window)).Handle
@@ -246,18 +295,26 @@ function Start-UpdateWindow {
     $runspace.Open()
 
     # Share variables with the runspace
-    $runspace.SessionStateProxy.SetVariable('dispatcher',   $dispatcher)
-    $runspace.SessionStateProxy.SetVariable('ctrlStatus',   $ctrlStatus)
-    $runspace.SessionStateProxy.SetVariable('ctrlProgress', $ctrlProgress)
-    $runspace.SessionStateProxy.SetVariable('ctrlCount',    $ctrlCount)
-    $runspace.SessionStateProxy.SetVariable('ctrlLog',      $ctrlLog)
-    $runspace.SessionStateProxy.SetVariable('ctrlFooterR',  $ctrlFooterR)
-    $runspace.SessionStateProxy.SetVariable('autoReboot',   $AutoReboot.IsPresent)
-    $runspace.SessionStateProxy.SetVariable('noReboot',     $NoReboot.IsPresent)
-    $runspace.SessionStateProxy.SetVariable('kbFilter',     $KBArticleID)
-    $runspace.SessionStateProxy.SetVariable('window',       $window)
-    $runspace.SessionStateProxy.SetVariable('LogPath',      $script:LogPath)
-    $runspace.SessionStateProxy.SetVariable('RegKey',       $script:RegKey)
+    $runspace.SessionStateProxy.SetVariable('dispatcher',      $dispatcher)
+    $runspace.SessionStateProxy.SetVariable('ctrlStatus',      $ctrlStatus)
+    $runspace.SessionStateProxy.SetVariable('ctrlProgress',    $ctrlProgress)
+    $runspace.SessionStateProxy.SetVariable('ctrlCount',       $ctrlCount)
+    $runspace.SessionStateProxy.SetVariable('ctrlLog',         $ctrlLog)
+    $runspace.SessionStateProxy.SetVariable('ctrlFooterLeft',  $ctrlFooterLeft)
+    $runspace.SessionStateProxy.SetVariable('ctrlFooterR',     $ctrlFooterR)
+    $runspace.SessionStateProxy.SetVariable('ctrlCountdownP',  $ctrlCountdownP)
+    $runspace.SessionStateProxy.SetVariable('ctrlCountdownT',  $ctrlCountdownT)
+    $runspace.SessionStateProxy.SetVariable('ctrlPauseBtn',    $ctrlPauseBtn)
+    $runspace.SessionStateProxy.SetVariable('ctrlRestartBtn',  $ctrlRestartBtn)
+    $runspace.SessionStateProxy.SetVariable('ctrlShutdownBtn', $ctrlShutdownBtn)
+    $runspace.SessionStateProxy.SetVariable('autoReboot',      $AutoReboot.IsPresent)
+    $runspace.SessionStateProxy.SetVariable('noReboot',        $NoReboot.IsPresent)
+    $runspace.SessionStateProxy.SetVariable('kbFilter',        $KBArticleID)
+    $runspace.SessionStateProxy.SetVariable('countdownSeconds',$CountdownSeconds)
+    $runspace.SessionStateProxy.SetVariable('window',          $window)
+    $runspace.SessionStateProxy.SetVariable('uiState',         $uiState)
+    $runspace.SessionStateProxy.SetVariable('LogPath',         $script:LogPath)
+    $runspace.SessionStateProxy.SetVariable('RegKey',          $script:RegKey)
 
     $ps = [System.Management.Automation.PowerShell]::Create()
     $ps.Runspace = $runspace
@@ -287,9 +344,7 @@ function Start-UpdateWindow {
             }
         }
 
-        # ---- UI helpers -- GetNewClosure() captures variables into the
-        #      scriptblock's session state so they survive cross-thread
-        #      dispatch to the WPF UI thread.
+        # ---- UI helpers (use GetNewClosure to capture variables across threads)
         function Set-Status {
             param([string]$Text)
             try {
@@ -336,7 +391,6 @@ function Start-UpdateWindow {
         function Write-Log {
             param([string]$Message, [string]$Color = '#D4D4D4')
 
-            # Always write to file -- never let UI failure block file logging
             Write-FileLog -Message $Message
 
             try {
@@ -359,19 +413,99 @@ function Start-UpdateWindow {
         function Close-WindowSafely {
             try {
                 $sb = {
-                    $window.Add_Closing({ param($s,$e) $e.Cancel = $false })
+                    $uiState.ClosingPermitted = $true
                     $window.Close()
                 }.GetNewClosure()
                 $dispatcher.Invoke($sb)
             } catch { Write-FileLog "Close-Window failed: $_" -Level 'WARN' }
         }
 
+        function Start-RebootCountdown {
+            param([int]$Seconds = 900)
+
+            Write-FileLog "Starting reboot countdown ($Seconds seconds)."
+
+            $sb = {
+                # Switch UI to countdown mode
+                $ctrlFooterLeft.Visibility = [System.Windows.Visibility]::Collapsed
+                $ctrlCountdownP.Visibility = [System.Windows.Visibility]::Visible
+
+                $uiState.CountdownSeconds = $Seconds
+                $uiState.CountdownPaused  = $false
+
+                $m = [math]::Floor($Seconds / 60)
+                $s = $Seconds % 60
+                $ctrlCountdownT.Text = ("Restarting in {0:D2}:{1:D2}" -f $m, $s)
+
+                # Timer
+                $timer = New-Object System.Windows.Threading.DispatcherTimer
+                $timer.Interval = [TimeSpan]::FromSeconds(1)
+                $uiState.CountdownTimer = $timer
+
+                $timer.Add_Tick({
+                    if (-not $uiState.CountdownPaused) {
+                        $uiState.CountdownSeconds = $uiState.CountdownSeconds - 1
+                        $sec = $uiState.CountdownSeconds
+
+                        if ($sec -le 0) {
+                            $timer.Stop()
+                            $ctrlCountdownT.Text = "Restarting now..."
+                            $uiState.ClosingPermitted = $true
+                            try { Restart-Computer -Force } catch { }
+                            return
+                        }
+
+                        $mm = [math]::Floor($sec / 60)
+                        $ss = $sec % 60
+                        $ctrlCountdownT.Text = ("Restarting in {0:D2}:{1:D2}" -f $mm, $ss)
+                    }
+                }.GetNewClosure())
+
+                $timer.Start()
+
+                # Pause / Resume
+                $ctrlPauseBtn.Add_Click({
+                    $uiState.CountdownPaused = -not $uiState.CountdownPaused
+                    if ($uiState.CountdownPaused) {
+                        $ctrlPauseBtn.Content = "Resume"
+                        $ctrlCountdownT.Foreground = [System.Windows.Media.Brushes]::DarkOrange
+                    } else {
+                        $ctrlPauseBtn.Content = "Pause"
+                        $ctrlCountdownT.Foreground = [System.Windows.Media.Brushes]::Black
+                    }
+                }.GetNewClosure())
+
+                # Restart now
+                $ctrlRestartBtn.Add_Click({
+                    if ($uiState.CountdownTimer) { $uiState.CountdownTimer.Stop() }
+                    $ctrlCountdownT.Text = "Restarting now..."
+                    $ctrlPauseBtn.IsEnabled    = $false
+                    $ctrlRestartBtn.IsEnabled  = $false
+                    $ctrlShutdownBtn.IsEnabled = $false
+                    $uiState.ClosingPermitted = $true
+                    try { Restart-Computer -Force } catch { }
+                }.GetNewClosure())
+
+                # Shutdown
+                $ctrlShutdownBtn.Add_Click({
+                    if ($uiState.CountdownTimer) { $uiState.CountdownTimer.Stop() }
+                    $ctrlCountdownT.Text = "Shutting down..."
+                    $ctrlPauseBtn.IsEnabled    = $false
+                    $ctrlRestartBtn.IsEnabled  = $false
+                    $ctrlShutdownBtn.IsEnabled = $false
+                    $uiState.ClosingPermitted = $true
+                    try { Stop-Computer -Force } catch { }
+                }.GetNewClosure())
+            }.GetNewClosure()
+
+            $dispatcher.Invoke($sb)
+        }
+
         # ---- 0. Start log ------------------------------------------------
         Write-FileLog "==============================================="
         Write-FileLog "AutopilotWindowsUpdate started (user: $env:USERNAME, machine: $env:COMPUTERNAME)"
-        Write-FileLog "Parameters: AutoReboot=$autoReboot  NoReboot=$noReboot  KB=$($kbFilter -join ',')"
+        Write-FileLog "Parameters: AutoReboot=$autoReboot  NoReboot=$noReboot  KB=$($kbFilter -join ',')  Countdown=${countdownSeconds}s"
 
-        # Smoke test the dispatcher pipeline immediately
         Set-Status "Initializing..."
         Write-Log "Script started." '#9CDCFE'
 
@@ -391,7 +525,6 @@ function Start-UpdateWindow {
                 Write-Log "NuGet OK (v$($nuget.Version))." '#4EC9B0'
             }
 
-            # Trust PSGallery to avoid interactive prompt
             try {
                 $gallery = Get-PSRepository -Name PSGallery -ErrorAction SilentlyContinue
                 if ($gallery -and $gallery.InstallationPolicy -ne 'Trusted') {
@@ -510,7 +643,6 @@ function Start-UpdateWindow {
             $rebootNeeded = $false
             $failedCount  = 0
 
-            # Capture output stream (result objects) plus verbose/warning/error
             Install-WindowsUpdate @installParams 4>&1 3>&1 2>&1 | ForEach-Object {
                 $line = $_
 
@@ -526,7 +658,6 @@ function Start-UpdateWindow {
                     Write-FileLog "ERROR: $($line.Exception.Message)" -Level 'ERROR'
                 }
                 elseif ($line -ne $null -and $line.PSObject -ne $null) {
-                    # Result object from PSWindowsUpdate (one per update)
                     $hasTitle  = $line.PSObject.Properties.Match('Title').Count  -gt 0
                     $hasResult = $line.PSObject.Properties.Match('Result').Count -gt 0
                     $hasStatus = $line.PSObject.Properties.Match('Status').Count -gt 0
@@ -557,7 +688,6 @@ function Start-UpdateWindow {
                         Write-FileLog "Processed: [$result] $kb $uTitle"
                     }
                     else {
-                        # Unknown object -- log as text
                         Write-Log "    $line" '#808080'
                     }
                 }
@@ -566,7 +696,6 @@ function Start-UpdateWindow {
             Write-Log "" '#D4D4D4'
             Write-Log "================================================" '#555555'
 
-            # Fallback: ask Windows whether a reboot is pending
             try {
                 if (Test-Path 'HKLM:\SOFTWARE\Microsoft\Windows\CurrentVersion\Component Based Servicing\RebootPending') {
                     $rebootNeeded = $true
@@ -584,21 +713,22 @@ function Start-UpdateWindow {
                 Write-Log "  Updates complete - reboot required." '#CE9178'
                 Write-FileLog "Installation complete - reboot required. ($detail)"
                 Set-DetectionKey -Status 'Completed' -Detail $detail
-                Set-Status "Complete - reboot required"
+                Set-Status "Updates complete - reboot required"
                 Set-Count  "All updates processed"
                 Set-Footer "Completed $(Get-Date -Format 'HH:mm')"
+                Set-ProgressDeterminate -Value $updates.Count -Max $updates.Count
 
                 if ($autoReboot) {
-                    Write-Log "  Rebooting in 30 seconds..." '#CE9178'
-                    Write-FileLog "AutoReboot: rebooting in 30 seconds."
+                    Write-Log "  Rebooting in 30 seconds (AutoReboot)..." '#CE9178'
                     Set-Status "Rebooting in 30 seconds..."
                     Start-Sleep -Seconds 30
+                    $uiState.ClosingPermitted = $true
                     Restart-Computer -Force
                 } else {
-                    Write-Log "  Reboot suppressed (NoReboot). Autopilot will continue." '#CE9178'
-                    Write-FileLog "NoReboot: reboot suppressed, Autopilot continues."
-                    Start-Sleep -Seconds 5
-                    Close-WindowSafely
+                    $mins = [math]::Floor($countdownSeconds / 60)
+                    Write-Log "  Showing $mins-minute reboot countdown." '#CE9178'
+                    Start-RebootCountdown -Seconds $countdownSeconds
+                    # Runspace returns; countdown runs on UI thread
                 }
             } else {
                 Write-Log "  All updates processed." '#4EC9B0'
@@ -644,11 +774,14 @@ function Start-UpdateWindow {
 
 #region ---- Entry point ------------------------------------------------------
 
-# Running directly (not dot-sourced)?
 if ($MyInvocation.InvocationName -ne '.') {
     Write-FileLog "Script invoked: $($MyInvocation.MyCommand.Path)"
     try {
-        Start-UpdateWindow -AutoReboot:$AutoReboot -NoReboot:$NoReboot -KBArticleID $KBArticleID
+        Start-UpdateWindow `
+            -AutoReboot:$AutoReboot `
+            -NoReboot:$NoReboot `
+            -KBArticleID $KBArticleID `
+            -CountdownSeconds $CountdownSeconds
         Write-FileLog "Script exited normally (exit 0)."
         exit 0
     }
