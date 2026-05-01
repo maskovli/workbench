@@ -4,6 +4,7 @@
 
 # Output / data
 *.csv
+!scripts/configmgr/boundaries/examples/*.csv
 *.log
 *.json.bak
 output/
@@ -18,7 +19,6 @@ output/
 
 # Temp / scratch
 temp*
-*copy*
 Untitled*.ps1
 
 # Credentials / secrets
